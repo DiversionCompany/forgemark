@@ -191,7 +191,8 @@ func parseFlags() (*cliConfig, error) {
 	flag.StringVar(&cfg.out, "out", "", "write JSON results here (default: results/forgemark-<id>.json)")
 	flag.IntVar(&cfg.workload.SessionCommits, "session-commits", 5, "session strategy: commit+push checkpoints per cloned session")
 	flag.IntVar(&cfg.workload.CloneDepth, "clone-depth", 1, "clone/session strategy: shallow clone depth (1=tip; 0=full history)")
-	flag.StringVar(&cfg.workload.BaseRef, "base-ref", "", "clone/session strategy: branch to clone — bare name (main) or full ref (refs/heads/main); default: remote default branch")
+	flag.StringVar(&cfg.workload.BaseRef, "base-ref", "", "clone/session strategy: branch to clone — bare name (main) or full ref (refs/heads/main); default: remote default branch. With -base-repo: the local ref to branch from (default HEAD)")
+	flag.StringVar(&cfg.workload.BaseRepo, "base-repo", "", "branch/repo strategy: local clone (git clone --depth 1 --filter=blob:none --no-checkout) whose tip every agent branches from; the target must already have that commit. Default: orphan branches")
 
 	// entiredb: presence of -token-url/-jurisdiction selects the entiredb path.
 	flag.StringVar(&cfg.target.TokenURL, "token-url", "", "entiredb: core /oauth/token endpoint, e.g. https://<region>.auth.example.com/oauth/token (selects entiredb; not dialed)")

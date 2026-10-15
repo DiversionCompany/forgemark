@@ -146,6 +146,9 @@ your forge and make sure your credential can push:
 
 - **`branch`** needs **one empty repo**.
 - **`repo`** needs **M empty repos**.
+- **`branch`/`repo` with `-base-repo`** need repos that already hold the base
+  commit (for example, a mirror of the same project). See
+  [Pushing on a large repo](#pushing-on-a-large-repo).
 - **`clone`** and **`session`** need a repo with a **base branch that has
   content** to clone. An empty repo degrades to a no-read orphan, so a read-side
   run against an unseeded repo isn't measuring what you think — push a base
@@ -201,6 +204,22 @@ forgemark $FORGE -token-file ~/.forge-token -repos org/repo \
 # Session: clone + push 5 checkpoints, abandon, repeat (needs a seeded base branch)
 forgemark $FORGE -token-file ~/.forge-token -repos org/repo \
   -strategy session -session-commits 5 -clone-depth 1 -concurrency 8,32
+```
+
+#### Pushing on a large repo
+
+By default each agent pushes an orphan branch, so every push lands on a tiny
+tree with no history. To measure pushes on a real repo, give `-base-repo` a
+local clone: every agent branches from its tip (`-base-ref`, default `HEAD`)
+and writes its files under a top-level `forgemark/` directory. Agents keep only
+the base commit and its root tree in memory and push only the objects they
+create, so the clone needs no blobs and the target must already have the base
+commit:
+
+```bash
+git clone --depth 1 --filter=blob:none --no-checkout https://github.com/org/big-repo base
+forgemark $FORGE -token-file ~/.forge-token -repos org/big-repo-mirror \
+  -base-repo ./base -concurrency 1,8,32 -duration 2m
 ```
 
 The push URL is `<-remote>/<repo>` — the `-repos` value is appended **verbatim**
@@ -286,7 +305,8 @@ modest, or point `-remote` at a self-managed GitLab you control.
 | `-files-min`/`-files-max`/`-file-size` | `1`/`10`/`2048` | commit shape; ignored by `clone` |
 | `-object-format` | `auto` | `sha1` \| `sha256`; `auto` probes the Entire advertisement (generic/github default sha1) |
 | `-session-commits` | `5` | session strategy checkpoints per cloned session |
-| `-clone-depth`/`-base-ref` | `1`/default | clone/session strategy knobs |
+| `-clone-depth`/`-base-ref` | `1`/default | clone/session strategy knobs; `-base-ref` is also the local ref for `-base-repo` |
+| `-base-repo` | — | branch/repo strategy: local clone whose tip every agent branches from (see [Pushing on a large repo](#pushing-on-a-large-repo)) |
 | `-insecure` | `false` | skip TLS verification (dev / self-signed hosts) |
 | `-out` | — | JSON results path (default `results/forgemark-<id>.json`) |
 

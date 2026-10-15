@@ -29,6 +29,7 @@ type Runner struct {
 	ep     *endpoint
 	httpc  *http.Client
 	sink   Sink
+	base   *baseTip // nil unless Workload.BaseRepo is set
 
 	tokenExp   time.Time // zero: not a JWT, the server decides
 	levelsLeft int       // levels not yet started
@@ -70,6 +71,13 @@ func NewRunner(ctx context.Context, t Target, w Workload, sink Sink) (*Runner, e
 		return nil, err
 	}
 	r := &Runner{target: t, w: w, creds: creds, ep: ep, httpc: httpc, sink: sink, levelsLeft: len(w.Concurrency)}
+	if w.BaseRepo != "" {
+		// Loaded once and shared read-only; each agent copies its two objects.
+		if r.base, err = loadBaseTip(w.BaseRepo, w.BaseRef, ep.objFmt); err != nil {
+			r.Close()
+			return nil, err
+		}
+	}
 	if t.TokenURL != "" || t.Jurisdiction != "" {
 		// Only Entire's account token bounds the run. After discovery, so
 		// its time counts against the token.
@@ -187,7 +195,7 @@ func (r *Runner) RunLevel(ctx context.Context, c int, barrier *StartBarrier) (Le
 		}
 		node := r.ep.nodes[i%len(r.ep.nodes)]
 		ref := DestRef(r.w.BranchPrefix, r.w.RunID, c, i)
-		a, err := newAgent(i, repoPath, node, ref, r.ep.objFmt, &r.w.Commit, r.creds, r.httpc, clone, sess, r.sink)
+		a, err := newAgent(i, repoPath, node, ref, r.ep.objFmt, &r.w.Commit, r.creds, r.httpc, clone, sess, r.base, r.sink)
 		if err != nil {
 			if barrier != nil {
 				barrier.Arrive() // don't leave the coordinator's Await hanging

@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-billy/v6/memfs"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
+	"github.com/go-git/go-git/v6/plumbing"
 	gitclient "github.com/go-git/go-git/v6/plumbing/client"
 	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -43,9 +44,11 @@ type agent struct {
 	httpc *http.Client
 	clone *cloneConfig   // non-nil → "clone" strategy (clone-only loop)
 	sess  *sessionConfig // non-nil → "session" strategy (clone+push loop)
+	base  *baseTip       // non-nil → branch from this commit instead of an orphan line
 	sink  Sink           // optional live observer; nil on the CLI path
 
 	repo    *git.Repository
+	files   map[string]plumbing.Hash // base mode: blob per file under baseDir
 	samples []Sample
 }
 
@@ -73,16 +76,17 @@ const authorEmail = "agent@forgemark.invalid"
 // resetEvery re-initialises an agent's in-memory repo after this many commits.
 // memory.NewStorage keeps every object it ever wrote, so a long sweep would
 // grow unbounded (each commit adds fresh random blobs); re-init caps retained
-// history. Each agent force-pushes its own ref, so a fresh orphan line is fine.
+// history. Each agent force-pushes its own ref, so a fresh line (orphan, or
+// from the base tip) is fine.
 const resetEvery = 128
 
 // newAgent builds an agent. In branch/repo mode it initialises its in-memory
 // repo up front (object format matched to the remote). In clone/session mode
 // the repo is created per clone by the clone loop, so init is skipped.
-func newAgent(id int, repoPath, node, ref string, objFmt formatcfg.ObjectFormat, cfg *CommitConfig, creds credentialProvider, httpc *http.Client, clone *cloneConfig, sess *sessionConfig, sink Sink) (*agent, error) {
+func newAgent(id int, repoPath, node, ref string, objFmt formatcfg.ObjectFormat, cfg *CommitConfig, creds credentialProvider, httpc *http.Client, clone *cloneConfig, sess *sessionConfig, base *baseTip, sink Sink) (*agent, error) {
 	a := &agent{
 		id: id, repoPath: repoPath, node: node, ref: ref, objFmt: objFmt,
-		cfg: cfg, creds: creds, httpc: httpc, clone: clone, sess: sess, sink: sink,
+		cfg: cfg, creds: creds, httpc: httpc, clone: clone, sess: sess, base: base, sink: sink,
 	}
 	if clone == nil && sess == nil {
 		if err := a.initRepo(); err != nil {
@@ -107,6 +111,12 @@ func (a *agent) initRepo() error {
 		URLs: []string{verbatimURLFor(a.node, a.repoPath)},
 	}); err != nil {
 		return fmt.Errorf("create remote: %w", err)
+	}
+	if a.base != nil {
+		if err := a.base.seed(repo.Storer); err != nil {
+			return fmt.Errorf("seed base: %w", err)
+		}
+		a.files = map[string]plumbing.Hash{}
 	}
 	a.repo = repo
 	return nil
@@ -134,7 +144,11 @@ func (a *agent) run(ctx context.Context, start time.Time) {
 				continue
 			}
 		}
-		if err := a.commit(rng, iter); err != nil {
+		commit := a.commit
+		if a.base != nil {
+			commit = a.commitOnBase
+		}
+		if err := commit(rng, iter); err != nil {
 			// A local commit failure is a harness bug, not a server signal —
 			// record it as an error and keep going so one bad agent doesn't
 			// silently drop out of the concurrency level.
@@ -164,12 +178,8 @@ func (a *agent) commit(rng *rand.Rand, iter int) error {
 	if err != nil {
 		return fmt.Errorf("worktree: %w", err)
 	}
-	n := a.cfg.FilesMin
-	if a.cfg.FilesMax > a.cfg.FilesMin {
-		n += rng.Intn(a.cfg.FilesMax - a.cfg.FilesMin + 1)
-	}
 	buf := make([]byte, a.cfg.FileSize)
-	for i := range n {
+	for i := range a.fileCount(rng) {
 		name := fmt.Sprintf("file-%d.txt", i)
 		f, err := wt.Filesystem().Create(name)
 		if err != nil {
@@ -195,6 +205,15 @@ func (a *agent) commit(rng *rand.Rand, iter int) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// fileCount picks how many files the next commit changes.
+func (a *agent) fileCount(rng *rand.Rand) int {
+	n := a.cfg.FilesMin
+	if a.cfg.FilesMax > a.cfg.FilesMin {
+		n += rng.Intn(a.cfg.FilesMax - a.cfg.FilesMin + 1)
+	}
+	return n
 }
 
 func (a *agent) push(ctx context.Context) error {

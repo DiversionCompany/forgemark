@@ -80,7 +80,11 @@ type Workload struct {
 	// session/clone strategies
 	SessionCommits int
 	CloneDepth     int
-	BaseRef        string
+	BaseRef        string // also the ref to branch from with BaseRepo
+
+	// branch/repo strategies: path to a local clone whose BaseRef tip every
+	// agent branches from, instead of an orphan line. Empty keeps orphans.
+	BaseRepo string
 }
 
 // Validate applies the target-independent checks that parseFlags used to do,
@@ -93,6 +97,9 @@ func (w Workload) Validate() error {
 	}
 	if w.Strategy == "session" && w.SessionCommits < 1 {
 		return errors.New("-session-commits must be >= 1")
+	}
+	if w.BaseRepo != "" && w.Strategy != "branch" && w.Strategy != "repo" {
+		return errors.New("-base-repo needs -strategy branch or repo")
 	}
 	if w.CloneDepth < 0 {
 		return errors.New("-clone-depth must be >= 0 (0 = full history)")
